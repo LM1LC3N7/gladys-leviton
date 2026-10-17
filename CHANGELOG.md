@@ -12,44 +12,32 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
+- Sign-in to My Leviton with the e-mail and password of the app, as
+  decora-wifi does it; the token kept in `/data` and reused across cycles and
+  restarts, a new sign-in only when it is about to end or is refused (at most
+  one per cycle).
+- The verification code of two-factor accounts: the integration stops and
+  says so; "Verify the code" signs in with it, "Send the verification code"
+  makes Leviton e-mail a new one (at most once a minute). An account that
+  asks for a code is never signed in again without a click; the code is never
+  kept.
+- Dimmers (on/off as a light, brightness bounded to the device levels, 0
+  turns off), switches and plugs (on/off), and an "Online" state per device;
+  fans, button controllers and the bridge are not shown.
+- Commands one at a time per device, sent within 3 s of the click or refused
+  unsent, Gladys answered within its 5 s, never a sign-in from a command; the
+  confirmed value shown at once and held 15 s against a stale read, the
+  device read again 2 s after.
+- One read per residence every 60 s (30 to 60), the residences every hour.
+  Resilience: a refused token signs in once, then a pause and new tries after
+  1 h, 6 h, then every 24 h; a refused password stops with new tries after
+  6 h then every 24 h; 429, "too many failed attempts" and 403 pause every
+  path; these stops and pauses kept in `/data` and capped when read back;
+  5xx and network errors retried after 1 to 15 minutes.
+- Status, Discovery, badges and states sent again at every reconnection to
+  Gladys; the Discovery list never shrinks. Transport badge per device
+  (unreachable when Leviton says it is offline).
+- "Test the connection" button; documentation in English and French;
+  `LICENSE` and `THIRD_PARTY_NOTICES.md` shipped in the image.
 
-### Changed
-
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
-
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-leviton/commits/main

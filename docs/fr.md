@@ -1,67 +1,130 @@
-# Template de démonstration
+# Leviton Decora Smart Wi-Fi pour Gladys Assistant
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Affiche et commande dans Gladys les interrupteurs, variateurs et prises
+**Leviton Decora Smart Wi-Fi** (États-Unis, Canada) de votre compte
+**My Leviton**, par le cloud de Leviton.
+
+> **API non officielle, jamais testée avec un vrai compte.** L'intégration
+> parle à l'API de l'application My Leviton, que Leviton ne documente pas et
+> peut changer à tout moment. Elle a été écrite à partir de la bibliothèque
+> decora-wifi (celle de l'intégration Home Assistant) et de l'intégration
+> Home Assistant de schmittx, et testée seulement avec des réponses
+> inventées. Sans lien avec Leviton.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil Gladys par appareil Leviton pris en charge :
 
-## Configuration
+| Appareil Leviton                        | Fonctionnalités Gladys                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| Variateur (DW6HD, D26HD, DW1KD, D2ELV…) | Marche/Arrêt (lumière), Luminosité (0 à 100), En ligne |
+| Interrupteur (DW15S, D215S…)            | Marche/Arrêt (interrupteur), En ligne                  |
+| Prise (DW15P, DW15A, D215P, D215O…)     | Marche/Arrêt (interrupteur), En ligne                  |
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+- **Luminosité** : 0 éteint la lumière ; une autre valeur l'allume, bornée
+  aux niveaux minimum et maximum réglés dans l'application.
+- **En ligne** (1 = oui, lecture seule) : ce que Leviton dit de l'appareil.
+  Un appareil hors ligne est aussi marqué « injoignable » sur sa carte ; son
+  état n'est pas affiché (il serait périmé) et ses commandes sont refusées.
+- **Consommation** : Leviton n'en donne aucune pour ces appareils dans les
+  bibliothèques connues : il n'y en a pas ici.
+- Les **ventilateurs** (DW4SF, D24SF), les **télécommandes à boutons**
+  (DW4BC) et le **pont** (MLWSB) ne sont pas affichés dans cette version.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Les interrupteurs, prises et lumières sont des interrupteurs Gladys
+ordinaires : un « tout éteindre » de Gladys, d'un assistant vocal ou d'une
+scène les éteint aussi. N'y branchez pas un appareil qui ne doit jamais être
+coupé.
 
-## Actions
+## Mise en place
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+1. Dans Gladys, installez l'intégration **Leviton Decora Smart Wi-Fi** depuis
+   le store.
+2. Saisissez l'**e-mail** et le **mot de passe** de votre compte My Leviton
+   (ceux de l'application), puis enregistrez.
+3. Si l'état indique qu'un code de vérification est demandé, voir
+   ci-dessous.
+4. Ouvrez l'onglet **Découverte** et ajoutez les appareils.
 
-## Scènes
+Le champ du mot de passe est un champ `secret` : Gladys le garde dans sa
+base (en clair, comme toute valeur de configuration, et dans ses
+sauvegardes), ne le réaffiche jamais, et l'intégration ne l'envoie qu'à My
+Leviton (`my.leviton.com`). Il ne sert qu'aux connexions : la session
+obtenue est gardée et réutilisée à chaque lecture et après un redémarrage,
+jusqu'à sa fin.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+### Code de vérification (double authentification)
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+Si votre compte My Leviton utilise la double authentification, Leviton
+envoie un code par e-mail à chaque connexion sans code. L'intégration
+s'arrête alors et l'état l'indique :
 
-## Tableau de bord
+1. Sous **Vérifier le code**, saisissez le code du dernier e-mail de
+   Leviton et cliquez sur le bouton. « Code accepté » veut dire connecté.
+2. Pas d'e-mail, ou code trop vieux ? Cliquez sur **Envoyer le code de
+   vérification** : l'intégration se connecte sans code et Leviton envoie un
+   nouveau code (au plus une fois par minute).
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+L'intégration n'envoie jamais de code sans votre clic, ne le garde pas, et
+ne se reconnecte jamais d'elle-même pour un compte qui demande un code : la
+session est gardée tant que Leviton l'accepte ; quand il la refuse,
+l'intégration s'arrête et vous redemande un code. Au plus un e-mail
+automatique, à la toute première connexion.
 
-## Dépannage
+## Rafraîchissement
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+Les appareils sont lus toutes les **60 secondes** par défaut (30 à 60,
+_Intervalle de rafraîchissement_), en **une requête par résidence** ; la
+liste des résidences est relue toutes les heures.
+
+Une commande part tout de suite ; la valeur confirmée par Leviton s'affiche
+aussitôt, l'appareil est relu 2 secondes plus tard, et une lecture un peu en
+retard ne défait pas la valeur commandée (15 secondes). Les commandes d'un
+même appareil passent l'une après l'autre. Gladys attend 5 secondes la
+réponse : une commande qui ne peut pas partir dans les 3 secondes est
+refusée **avant d'être envoyée** ; une commande partie mais lente reçoit sa
+réponse à 4,3 secondes et son effet s'affiche ensuite.
+
+## En cas de problème
+
+- **E-mail ou mot de passe refusé** : l'intégration s'arrête, même après un
+  redémarrage, et réessaie une fois après 6 heures puis toutes les 24 heures
+  (jamais pour un compte qui demande un code). Corrigez-les puis enregistrez,
+  ou cliquez sur _Tester la connexion_.
+- **Trop de connexions échouées** (refus de Leviton) : une pause d'une heure,
+  commandes et boutons compris, gardée après un redémarrage.
+- **Session refusée** : une seule nouvelle connexion ; refusée à nouveau,
+  l'intégration se met en pause et réessaie après 1 heure, 6 heures, puis
+  toutes les 24 heures. _Tester la connexion_ réessaie tout de suite.
+- **Trop de requêtes (429)** : une pause de 1 minute à 6 heures (le
+  `Retry-After` de Leviton, 15 minutes sans lui), pour les lectures, les
+  commandes et les boutons, gardée après un redémarrage ou une reconnexion à
+  Gladys. **HTTP 403** des lectures : une heure.
+- **Leviton indisponible (5xx, réseau)** : nouveaux essais après 1, 2, 5, 10,
+  puis toutes les 15 minutes, jamais plus vite que l'intervalle.
+
+## Limites
+
+- API non officielle : Leviton peut la changer, la bloquer ou demander plus
+  de vérifications.
+- Pas de mises à jour en direct (le canal websocket de l'application) : une
+  lecture toutes les 30 à 60 secondes.
+- Un seul compte My Leviton par Gladys, dix résidences au plus.
+- Pas de ventilateurs, de détecteur de mouvement (D2MSD : seulement la
+  lumière), de scènes, de programmes ni de réglages (LED, fondu…) dans cette
+  version.
+- Jamais testée avec un vrai compte : merci de signaler ce que vous voyez sur
+  le [dépôt GitHub](https://github.com/LM1LC3N7/gladys-leviton/issues) (sans
+  votre e-mail, mot de passe ni codes).
+
+## Vie privée
+
+L'intégration garde dans `/data/leviton-state.json` (lisible par son seul
+conteneur) : le jeton de session, l'identifiant d'utilisateur Leviton et la
+fin du jeton, le compte auquel ils appartiennent sous forme d'empreinte de
+l'e-mail, les comptes (empreintes) qui demandent un code, l'heure de la
+dernière demande de code, la fin d'une pause, et un arrêt sur identifiants
+refusés lié à une empreinte salée de l'e-mail et du mot de passe. Ni
+l'e-mail, ni le mot de passe, ni les codes. L'adresse MAC, le numéro de
+série et l'adresse IP locale des appareils ne sont pas transmis à Gladys.
+Rien n'est envoyé ailleurs qu'à My Leviton.
