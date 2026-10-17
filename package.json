@@ -1,6 +1,6 @@
 {
   "name": "gladys-leviton",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Leviton Decora Smart Wi-Fi switches, dimmers and plugs (US, CA) for Gladys Assistant through the My Leviton cloud: on/off, brightness, online state; verification code in two buttons.",
   "type": "module",
