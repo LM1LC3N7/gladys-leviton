@@ -25,36 +25,50 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (LevitonApp)
   as the `authorization` header; its `ttl` gives its end (one hour assumed
   without it). The token is kept in `/data` and reused across cycles and
   restarts; a new sign-in only when it is about to end (a tenth of its life
-  before, 5 min to 1 h) or refused, at most once per cycle.
+  before, 5 min to 1 h, at most half of it) or refused, at most once per
+  cycle.
+- **Never a sign-in without a click, except for an account known "without
+  code"**: a sign-in without code e-mails a code to a two-factor account.
+  `/data` keeps the accounts (hashes of the e-mail) whose sign-in without code
+  was answered 200, removed at the first 406; only those are signed in by
+  themselves (start, reconnection, renewal, spaced new tries). Any other
+  account, or a lost `/data`, stops with "Sign-in required", no timer. Saving
+  the configuration and the buttons are clicks, each allowing one sign-in in
+  the cycle it starts only (a click during a pause is spent then).
 - **Verification code** (as schmittx's integration): the sign-in answers 406
   "Requires code" (Leviton e-mails a code); _Verify the code_ sends the same
   sign-in with `code`, _Send the verification code_ a sign-in without code
-  (a new e-mail, at most once a minute). An account that asked for a code is
-  remembered (a hash of its e-mail) and never signed in again without a
-  click: its token is used until Leviton refuses it. The code is never kept.
-- **Reads**: `/Person/<id>/residentialPermissions`, then
-  `/ResidentialAccounts/<id>/residences` (or the residence of the
-  permission), every hour; `/Residences/<id>/iotSwitches` every 60 s (30–60),
-  one request per residence. Answers read up to 2 MiB; redirects never
-  followed.
+  (a new e-mail, at most once a minute). A code account's token is used
+  until Leviton refuses it. The code is never kept.
+- **Reads**: `/Person/<id>/residentialPermissions`, then the residence and/or
+  the `/ResidentialAccounts/<id>/residences` of each permission (both read
+  when a permission holds both), every hour; `/Residences/<id>/iotSwitches`
+  every 60 s (30–60), one request per residence, each on its own: a residence
+  in error keeps its last devices (unreachable, not sent again) and the
+  others go on. Answers read up to 2 MiB; redirects never followed; a new
+  socket per request.
 - **Commands**: `PUT /IotSwitches/<id>` with `{ "power": "ON" | "OFF" }` or
   `{ "power": "ON", "brightness": n }` (bounded to `minLevel`–`maxLevel`; 0
-  turns off), one at a time per device, sent within 3 s of the click or
-  refused unsent, Gladys answered at 4.3 s at the latest, never a sign-in
-  from a command; the answer shown at once and held 15 s against a stale
-  read, `GET /IotSwitches/<id>` 2 s after.
+  turns off), one at a time per device, sent within 3 s of the click (queue,
+  sign-in in progress and a send limit included) or refused unsent, "done" at
+  4.3 s only once sent, never a sign-in from a command; the answer shown at
+  once and held 15 s against a stale read, `GET /IotSwitches/<id>` 2 s after.
 - **Errors**: a refused token: one new sign-in and the read again; refused
   again right after, a stop with new tries after 1 h, 6 h, then every 24 h. A
   refused password or a rejected sign-in: a stop, new tries after 6 h then
-  every 24 h (none for a code account). 429 (`Retry-After` bounded to
-  1 min – 6 h, 15 min without it), "too many failed attempts" and a 403 of the
-  reads (1 h) pause every path. Stops and pauses are kept in `/data` and
-  capped when read back. 5xx/network: 1, 2, 5, 10, then 15 minutes, never
-  under the interval.
+  every 24 h (only for an account known without code; any other waits for a
+  click). 429 (`Retry-After` bounded to 1 min – 6 h, 15 min without it) and
+  "too many failed attempts" (1 h) pause every path; a 403 of the reads
+  pauses every path (1 h) only when every residence fails (after a new
+  sign-in, for an account known without code); a 403 of one residence pauses
+  nothing. Stops and pauses are kept in `/data` and capped when read back.
+  5xx/network: 1, 2, 5, 10, then 15 minutes, never under the interval.
 - **Gladys side**: one device per supported iotSwitch (`device:<Leviton id>`);
   dimmers `light/binary` + `light/brightness`, switches and plugs
   `switch/binary`, `online` as `unknown/unknown` read only, a transport badge
-  per device. The Discovery list never shrinks: created features are kept as
+  per device. GFCI outlets (D2GF1, D2GF2), fans, button controllers and the
+  bridge are hidden; a model not in the lists is shown read only. The
+  Discovery list never shrinks: created features are kept as
   Gladys has them, devices seen earlier stay. Status, Discovery, badges and
   states are sent again at every reconnection to Gladys.
 

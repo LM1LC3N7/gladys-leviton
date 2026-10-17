@@ -655,7 +655,50 @@ test('a pause read back from /data is capped (6 h) and kept across a change of a
   await settle();
   assert.equal(server.requests.length, 0);
   await advance(6 * HOUR + MINUTE, 10 * MINUTE);
-  assert.ok(server.logins().length >= 1);
+  // The click was spent during the pause: the new account waits for another one.
+  assert.equal(server.logins().length, 0);
+  assert.match(message(gladys).en, /Sign-in required/);
+});
+
+test('a configuration saved during a 429 pause never signs in when the pause ends', async (t) => {
+  const store = memoryStore({ pause: { kind: 'rate', until: NOW + HOUR } });
+  const server = fakeLeviton({ otp: true });
+  const { gladys, advance } = await setup(t, { server, store, create: false });
+  await gladys.fake.configUpdated(CONFIG);
+  await settle();
+  assert.match(message(gladys).en, /HTTP 429/);
+  await advance(2 * HOUR, 5 * MINUTE);
+  assert.equal(server.logins().length, 0);
+  assert.equal(server.emails, 0);
+  assert.match(message(gladys).en, /Sign-in required/);
+});
+
+test('a stop waiting for a click turns the badges unreachable', async (t) => {
+  const { gladys, app, server, set, advance } = await setup(t);
+  const badge = () =>
+    gladys.fake.transports.filter((e) => e.device_external_id === device(IDS.dimmer)).pop()
+      ?.transport;
+  assert.equal(badge(), DEVICE_TRANSPORTS.CLOUD);
+  // An account no longer known "without code", whose token a command finds refused.
+  app.memory.noCode = [];
+  server.revokeTokens();
+  await set(IDS.switch, 'power', 1);
+  await advance(60 * SECOND);
+  assert.match(message(gladys).en, /Sign-in required/);
+  assert.equal(server.logins().length, 1);
+  assert.equal(badge(), DEVICE_TRANSPORTS.UNREACHABLE);
+});
+
+test('a residence not read: its devices are not sent again, heartbeat included', async (t) => {
+  const { gladys, server, advance } = await setup(t);
+  server.residences[RESIDENCES.cabin] = null;
+  const sent = () =>
+    gladys.fake.states.filter((s) => s.device_feature_external_id.startsWith(device(IDS.cabin)))
+      .length;
+  await advance(60 * SECOND);
+  const before = sent();
+  await advance(40 * MINUTE, MINUTE);
+  assert.equal(sent(), before, 'nothing of the cabin, not even the 30 min heartbeat');
 });
 
 test('5xx and network errors: retried after 1, 2, 5... minutes, never sooner than the interval', async (t) => {

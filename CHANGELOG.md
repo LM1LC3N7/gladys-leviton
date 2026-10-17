@@ -45,6 +45,10 @@ the notes of the version's GitHub Release.
   progress, slow network): refused unsent; "done" only once it has left. A
   residence in error keeps its last devices without stopping the others.
   Unknown models read only; GFCI outlets not shown.
+- A click (saved configuration, button) allows a sign-in only in the cycle
+  it starts: saved during a pause, it never signs in when the pause ends. A
+  stop waiting for a click turns the badges unreachable; the devices of a
+  residence not read are not sent again (heartbeat included).
 - "Test the connection" button; documentation in English and French;
   `LICENSE` and `THIRD_PARTY_NOTICES.md` shipped in the image.
 

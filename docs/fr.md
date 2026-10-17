@@ -127,8 +127,11 @@ et son effet s'affiche ensuite.
   `Retry-After` de Leviton, 15 minutes sans lui), pour les lectures, les
   commandes et les boutons, gardée après un redémarrage ou une reconnexion à
   Gladys.
-- **HTTP 403** des lectures : il déclenche d'abord une nouvelle connexion
-  (comme un jeton refusé) ; s'il reste, une pause d'une heure.
+- **HTTP 403** des lectures : un 403 sur une seule résidence ne met rien en
+  pause (elle garde ses derniers appareils). Quand toutes les résidences
+  répondent 403, l'intégration se reconnecte d'abord une fois (comme pour un
+  jeton refusé), seulement pour un compte connu « sans code » ; si le 403
+  reste, ou pour un autre compte, une pause d'une heure.
 - **Leviton indisponible (5xx, réseau)** : nouveaux essais après 1, 2, 5, 10,
   puis toutes les 15 minutes, jamais plus vite que l'intervalle.
 

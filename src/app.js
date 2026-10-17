@@ -449,6 +449,11 @@ export class LevitonApp {
   async run({ quick = false } = {}) {
     const generation = this.generation;
     const now = this.now();
+    // A click allows one sign-in, for the cycle it starts only: consumed here,
+    // even when this run waits (a pause, a stop), so a click during a pause
+    // never signs in when the pause ends.
+    const granted = this.grant;
+    this.grant = false;
     if (!this.client.hasCredentials) {
       return;
     }
@@ -458,15 +463,21 @@ export class LevitonApp {
       this.blocked = undefined;
     }
     if (this.blocked || now < this.pausedUntil) {
+      const paused = this.pauseMessage();
+      if (granted && paused && !this.blocked) {
+        // The click is spent on a pause: say why nothing happens.
+        await this.setStatus(this.connectedOnce, paused);
+      }
       this.scheduleNext();
       return;
     }
     // A sign-in without a click only for an account known to need no code;
     // a click allows one, for this cycle only.
-    const options = { allowLogin: this.mayLogin };
-    this.grant = false;
+    const options = { allowLogin: this.noCode || granted };
     if (!this.client.session && !options.allowLogin) {
       await this.loginRequired();
+      // The badges follow the stop (unreachable).
+      await this.publishBadges();
       return;
     }
     this.client.beginCycle();
@@ -785,7 +796,9 @@ export class LevitonApp {
 
   queueStates(created = this.createdFeatures(), only) {
     for (const [id, plan] of this.plans) {
-      if (only && id !== only) {
+      // A device of a residence not read this cycle: its old values are not
+      // queued again (nor sent again by the 30 min heartbeat).
+      if ((only && id !== only) || this.stale.has(id)) {
         continue;
       }
       for (const { device_feature_external_id: featureId, state } of deviceStates(

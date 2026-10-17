@@ -116,8 +116,11 @@ refused **without having been sent**; a command sent but slow is answered at
 - **Too many requests (429)**: a pause of 1 minute to 6 hours (Leviton's
   `Retry-After`, 15 minutes without it), for the reads, the commands and the
   buttons, kept after a restart or a reconnection to Gladys.
-- **HTTP 403** of the reads: it first triggers a new sign-in (as a refused
-  token); if it stays, a one-hour pause.
+- **HTTP 403** of the reads: a 403 of one residence pauses nothing (it keeps
+  its last devices). When every residence answers 403, the integration first
+  signs in again once (as for a refused token), only for an account known
+  "without code"; if the 403 stays, or for any other account, a one-hour
+  pause.
 - **Leviton unavailable (5xx, network)**: new tries after 1, 2, 5, 10, then
   every 15 minutes, never sooner than the interval.
 
