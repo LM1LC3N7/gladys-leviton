@@ -56,10 +56,14 @@ export const MODELS = {
     'D36HD',
     'D2MSD',
   ]),
-  outlets: new Set(['DW15R', 'DW15A', 'DW15P', 'D215P', 'D215O', 'D215R', 'D2GF1', 'D2GF2']),
+  outlets: new Set(['DW15R', 'DW15A', 'DW15P', 'D215P', 'D215O', 'D215R']),
   switches: new Set(['DW15S', 'D215S', 'D315S', 'DN15S', 'D2SCS']),
-  /** Not shown: fan speed controllers, button controllers, the Wi-Fi bridge. */
-  hidden: new Set(['DW4SF', 'D24SF', 'DW4BC', 'MLWSB']),
+  /**
+   * Not shown: fan speed controllers, button controllers, the Wi-Fi bridge,
+   * and the GFCI outlets (D2GF1, D2GF2: a ground-fault protection is not a
+   * plug to switch from Gladys; their fault state is for later).
+   */
+  hidden: new Set(['DW4SF', 'D24SF', 'DW4BC', 'MLWSB', 'D2GF1', 'D2GF2']),
 };
 
 export const LIMITS = {

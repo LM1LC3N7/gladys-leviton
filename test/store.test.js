@@ -46,6 +46,7 @@ test('anything malformed is dropped', () => {
       salt: 'short',
       session: { account: ACCOUNT, token: '', userId: '1' },
       twoFactor: ['nope', ACCOUNT, ACCOUNT],
+      noCode: 'corrupted',
       codeAt: NOW + HOUR,
       pause: { kind: 'other', until: NOW + HOUR },
       block: { kind: 'two_factor', fingerprint: ACCOUNT },
@@ -55,6 +56,7 @@ test('anything malformed is dropped', () => {
   assert.deepEqual(memory, {
     salt: null,
     session: null,
+    noCode: [],
     twoFactor: [ACCOUNT],
     codeAt: NOW,
     pause: null,

@@ -4,9 +4,12 @@
 //   - a random salt made once (for the fingerprint below);
 //   - the token of the session (its user id, its end), with the account it
 //     belongs to (a hash of the e-mail), so a restart does not sign in again;
-//   - the accounts (hashes of the e-mail) that asked for a verification code:
-//     they are never signed in again without a click (each sign-in e-mails a
-//     code), and when the button last started a sign-in;
+//   - the accounts (hashes of the e-mail) whose sign-in without code was
+//     accepted: the only ones signed in without a click (a sign-in without
+//     code e-mails a code to an account that uses one); lost or corrupted,
+//     the list is empty and every sign-in waits for a click;
+//   - the accounts that asked for a verification code (for the message), and
+//     when the button last started a sign-in;
 //   - the end of a 429, "too many attempts" or 403 pause (kept across restarts
 //     and account changes);
 //   - a stop on refused credentials and its spaced retries, tied to a salted
@@ -17,7 +20,8 @@
 // -----------------------------------------------------------------------------
 
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile, rename, writeFile } from 'node:fs/promises';
+import { open, readFile, rename } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { LIMITS, TIMINGS } from './constants.js';
 
 export const STATE_FILE = '/data/leviton-state.json';
@@ -36,9 +40,27 @@ export function fileStore(path = STATE_FILE) {
     save(data) {
       const text = JSON.stringify(data);
       const write = chain.then(async () => {
+        // Written whole, flushed to disk, then renamed over the old file: a
+        // power cut leaves the old file or the new one, never half of one.
         const temporary = `${path}.tmp`;
-        await writeFile(temporary, text, { mode: 0o600 });
+        const file = await open(temporary, 'w', 0o600);
+        try {
+          await file.writeFile(text, 'utf8');
+          await file.sync();
+        } finally {
+          await file.close();
+        }
         await rename(temporary, path);
+        try {
+          const dir = await open(dirname(path), 'r');
+          try {
+            await dir.sync();
+          } finally {
+            await dir.close();
+          }
+        } catch {
+          // Not every system syncs a directory (Windows): the rename stands.
+        }
       });
       chain = write.catch(() => {});
       return write;
@@ -89,12 +111,15 @@ export function normalizeMemory(raw, now = Date.now()) {
   const pause = raw?.pause;
   const until = capped(pause?.until, TIMINGS.persistedPauseMax);
   const block = raw?.block;
+  const accounts = (list) =>
+    Array.isArray(list)
+      ? [...new Set(list.filter((a) => ACCOUNT.test(a)))].slice(-LIMITS.twoFactorAccounts)
+      : [];
   return {
     salt: typeof raw?.salt === 'string' && /^[0-9a-f]{32}$/.test(raw.salt) ? raw.salt : null,
     session: session(raw?.session),
-    twoFactor: Array.isArray(raw?.twoFactor)
-      ? [...new Set(raw.twoFactor.filter((a) => ACCOUNT.test(a)))].slice(-LIMITS.twoFactorAccounts)
-      : [],
+    noCode: accounts(raw?.noCode),
+    twoFactor: accounts(raw?.twoFactor),
     codeAt: time(raw?.codeAt) === undefined ? undefined : Math.min(raw.codeAt, now),
     pause: until !== undefined && PAUSES.has(pause.kind) ? { kind: pause.kind, until } : null,
     block:

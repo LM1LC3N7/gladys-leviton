@@ -20,9 +20,15 @@ export const idOf = (value) => {
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-/** The margin a token is renewed before it ends: a tenth of its life, 5 min to 1 h. */
+/**
+ * The margin a token is renewed before it ends: a tenth of its life, 5 min to
+ * 1 h, and never more than half of it (a short token is not renewed at once).
+ */
 const marginOf = (lifetime) =>
-  Math.min(TIMINGS.tokenMarginMax, Math.max(TIMINGS.tokenMarginMin, lifetime / 10));
+  Math.min(
+    lifetime / 2,
+    Math.min(TIMINGS.tokenMarginMax, Math.max(TIMINGS.tokenMarginMin, lifetime / 10)),
+  );
 
 /** A sign-in answer (`{ id, ttl, userId, user }`) -> the session kept (and persisted). */
 export function sessionOf(json, now) {
@@ -44,11 +50,13 @@ export function sessionOf(json, now) {
 }
 
 export class LevitonClient {
-  constructor({ transport = httpRequest, now = Date.now, onChange } = {}) {
+  constructor({ transport = httpRequest, now = Date.now, onChange, onLogin } = {}) {
     this.transport = transport;
     this.now = now;
     /** Called after the session changed (persist it; never throws). */
     this.onChange = onChange;
+    /** Called after a sign-in accepted, with `{ code }` (whether a code was sent). */
+    this.onLogin = onLogin;
     this.email = '';
     this.password = '';
     /** { token, userId, expiresAt, renewAt } | null */
@@ -90,7 +98,7 @@ export class LevitonClient {
   }
 
   /** One request with a JSON body (or none); the answer whatever its status. */
-  send(method, path, { payload, token, timeout, onSent } = {}) {
+  send(method, path, { payload, token, timeout, onSent, sendWithin } = {}) {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
     return this.transport(`${API_ROOT}${path}`, {
       method,
@@ -108,6 +116,7 @@ export class LevitonClient {
       body,
       maxBytes: LIMITS.responseBytes,
       onSent,
+      ...(sendWithin === undefined ? {} : { sendWithin }),
       ...this.options(timeout),
     });
   }
@@ -148,6 +157,11 @@ export class LevitonClient {
     }
     this.session = sessionOf(parseJson(answer.body), this.now());
     await this.changed();
+    try {
+      await this.onLogin?.({ code: Boolean(code) });
+    } catch {
+      // Best effort, as persisting.
+    }
     return this.session;
   }
 
@@ -185,12 +199,13 @@ export class LevitonClient {
 
   // --- API -------------------------------------------------------------------------
 
-  async apiSend(method, path, { payload, timeout, onSent } = {}) {
+  async apiSend(method, path, { payload, timeout, onSent, sendWithin } = {}) {
     const answer = await this.send(method, path, {
       payload,
       token: this.session?.token,
       timeout,
       onSent,
+      sendWithin,
     });
     const error = apiError(answer, { now: this.now() });
     if (error) {
@@ -204,14 +219,17 @@ export class LevitonClient {
    * treats it, when a new sign-in is allowed) is dropped, and the read done
    * once more after one new sign-in; refused again, or refused right after a
    * sign-in, it is `session_refused` (or `forbidden` for a 403).
+   *
+   * `retryAuth: false` (one residence among others): a 401/403 comes back as
+   * is, the session kept; the caller decides whether the token is the cause.
    */
-  async read(path, { allowLogin = true, timeout } = {}) {
+  async read(path, { allowLogin = true, timeout, retryAuth = true } = {}) {
     const fresh = await this.ensureToken({ allowLogin, timeout });
     try {
       return await this.apiSend('GET', path, { timeout });
     } catch (err) {
       const retry = err.kind === 'unauthorized' || (err.kind === 'forbidden' && allowLogin);
-      if (!retry) {
+      if (!retry || !retryAuth) {
         throw err;
       }
       if (fresh) {
@@ -241,12 +259,22 @@ export class LevitonClient {
 
   /**
    * A command: sent once, never retried (a retry could act twice), never with
-   * a new sign-in. A refused token is forgotten for the next cycle.
+   * a new sign-in, never while a sign-in runs (it would leave late), never
+   * after `sendWithin` ms (destroyed and refused unsent). A refused token is
+   * forgotten for the next cycle.
    */
-  async command(deviceId, payload, { timeout, onSent } = {}) {
+  async command(deviceId, payload, { timeout, onSent, sendWithin } = {}) {
+    if (this.authenticating) {
+      throw new LevitonError('timeout', 'a sign-in is running', { notSent: true });
+    }
     await this.ensureToken({ allowLogin: false });
     try {
-      return await this.apiSend('PUT', PATHS.switch(deviceId), { payload, timeout, onSent });
+      return await this.apiSend('PUT', PATHS.switch(deviceId), {
+        payload,
+        timeout,
+        onSent,
+        sendWithin,
+      });
     } catch (err) {
       if (err.kind === 'unauthorized') {
         await this.drop();
@@ -272,10 +300,10 @@ export class LevitonClient {
       if (!isObject(permission) || ids.size >= LIMITS.residences) {
         continue;
       }
+      // A permission may hold a residence, a residential account, or both.
       const residence = idOf(permission.residenceId);
       if (residence) {
         ids.add(residence);
-        continue;
       }
       const account = idOf(permission.residentialAccountId);
       if (!account) {

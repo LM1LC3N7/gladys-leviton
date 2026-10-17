@@ -73,6 +73,14 @@ export const T = {
     'Your My Leviton account asks for a verification code. Leviton e-mails one at each sign-in without code: no e-mail? Click "Send the verification code", then type the code under "Verify the code" in this configuration screen.',
     "Votre compte My Leviton demande un code de vérification. Leviton en envoie un par e-mail à chaque connexion sans code : pas d'e-mail ? Cliquez sur « Envoyer le code de vérification », puis saisissez le code sous « Vérifier le code » dans cet écran de configuration.",
   ),
+  loginRequired: both(
+    'Sign-in required: click "Test the connection" (or save the configuration). The integration never signs in by itself to an account not known to need no code: a sign-in could make Leviton e-mail you a code.',
+    "Connexion requise : cliquez sur « Tester la connexion » (ou enregistrez la configuration). L'intégration ne se connecte jamais d'elle-même à un compte dont elle ne sait pas qu'il n'a pas de code : une connexion pourrait faire envoyer un code par e-mail.",
+  ),
+  sessionRefusedWaiting: both(
+    'My Leviton refused the session again right after a new sign-in: click "Test the connection" to try again.',
+    'My Leviton a de nouveau refusé la session juste après une nouvelle connexion : cliquez sur « Tester la connexion » pour réessayer.',
+  ),
   sessionRefused: (wait) =>
     both(
       `My Leviton refused the session again right after a new sign-in: the integration paused. New try in ${wait.en}, or click "Test the connection".`,
@@ -167,6 +175,10 @@ export const ERRORS = {
     "L'appareil est hors ligne pour My Leviton : rien n'a été envoyé",
   ),
   invalidValue: both('Invalid value', 'Valeur invalide'),
+  readOnly: both(
+    'Unknown Leviton model: shown read only until the integration knows it',
+    "Modèle Leviton inconnu : affiché en lecture seule tant que l'intégration ne le connaît pas",
+  ),
   refused: (reason) =>
     both(
       `My Leviton refused the command (${reason})`,

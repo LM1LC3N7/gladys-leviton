@@ -18,6 +18,10 @@ test('kinds: the model first, canSetLevel for an unknown one; fans, remotes, bri
   assert.equal(kindOf({ model: 'DW4SF', power: 'ON' }), undefined);
   assert.equal(kindOf({ model: 'DW4BC' }), undefined);
   assert.equal(kindOf({ model: 'MLWSB', power: 'ON' }), undefined);
+  assert.equal(kindOf({ model: 'D2GF1', power: 'ON' }), undefined, 'a GFCI is no plug to switch');
+  assert.equal(kindOf({ model: 'D2GF2', power: 'ON' }), undefined);
+  assert.equal(kindOf({ model: 'X', power: 'toString' }), undefined, 'own keys only');
+  assert.equal(readSwitch({ id: 1, model: 'NEW1', power: 'ON' }).known, false);
   assert.equal(kindOf({ model: 'DW15S' }), undefined, 'no power state: not shown');
 });
 
@@ -30,6 +34,7 @@ test('a device read: ids, names, levels, online; nothing guessed', () => {
     version: '1.5.72',
     manufacturer: 'Leviton Manufacturing Co., Inc.',
     kind: 'dimmer',
+    known: true,
     power: 1,
     brightness: 75,
     minLevel: 10,
@@ -89,6 +94,8 @@ test('the session of a sign-in: its life, its renewal margin, its user id', () =
   const hour = sessionOf({ id: 'tok', ttl: 3600, user: { id: 'u1' } }, now);
   assert.equal(hour.userId, 'u1');
   assert.equal(hour.renewAt, now + HOUR - 6 * MINUTE);
+  const short = sessionOf({ id: 'tok', ttl: 120, userId: 7 }, now);
+  assert.equal(short.renewAt, now + 60_000, 'never more than half of its life before');
   const eternal = sessionOf({ id: 'tok', ttl: -1, userId: 7 }, now);
   assert.equal(eternal.expiresAt, now + HOUR, 'no usable ttl: one hour, as homebridge-myleviton');
   assert.throws(() => sessionOf({ ttl: 3600, userId: 7 }, now), { kind: 'bad_response' });

@@ -33,6 +33,21 @@ const FATAL = new Set([
   'forbidden',
   'no_credentials',
 ]);
+/**
+ * Errors of the read of one residence that leave the others readable (the
+ * residence keeps its last devices, marked unreachable). The rest ends the
+ * cycle at once.
+ */
+const PER_RESIDENCE = new Set([
+  'unauthorized',
+  'forbidden',
+  'http',
+  'unavailable',
+  'network',
+  'timeout',
+  'bad_response',
+  'size',
+]);
 /** The stops of a refusal, with the spaced new tries of each. */
 const SCHEDULES = {
   refused: TIMINGS.refusedRetry,
@@ -69,7 +84,12 @@ export class LevitonApp {
     this.now = now;
     this.timers = timers;
     this.store = store;
-    this.client = new LevitonClient({ transport, now, onChange: () => this.persist() });
+    this.client = new LevitonClient({
+      transport,
+      now,
+      onChange: () => this.persist(),
+      onLogin: (info) => this.loggedIn(info),
+    });
     this.publisher = new StatePublisher({ gladys, logger, now, timers });
     this.config = normalizeConfig();
     this.memory = normalizeMemory(null);
@@ -111,15 +131,30 @@ export class LevitonApp {
     this.lastTestAt = -Infinity;
     this.started = false;
     this.lastStatus = undefined;
+    /** A click (a saved configuration, a button): the next cycle may sign in once. */
+    this.grant = false;
+    /** Residence id -> its last device list (kept when a later read of it fails). */
+    this.lists = new Map();
+    /** Ids of the devices of a residence whose last read failed (badge unreachable). */
+    this.stale = new Set();
+    /** The account `known` belongs to. */
+    this.knownAccount = undefined;
   }
 
   // --- Lifecycle -------------------------------------------------------------
 
-  async start(raw = {}) {
+  /** `grant`: started by a click (a saved configuration), so it may sign in once. */
+  async start(raw = {}, { grant = false } = {}) {
     this.stop();
     await this.running;
     this.config = normalizeConfig(raw);
     this.reset();
+    if (this.knownAccount !== this.config.account) {
+      // Another account: the devices of the previous one are not published again.
+      this.known = new Map();
+      this.knownAccount = this.config.account;
+    }
+    this.grant = grant;
     this.memory = normalizeMemory(await this.store.load().catch(() => null), this.now());
     if (!this.memory.salt) {
       this.memory.salt = newSalt();
@@ -150,10 +185,10 @@ export class LevitonApp {
       this.scheduleNext();
       return;
     }
-    if (!this.client.session && this.twoFactor) {
-      // This account asks for a code: never signed in again without a click.
-      this.blocked = 'two_factor';
-      await this.setStatus(false, T.twoFactor);
+    if (!this.client.session && !this.mayLogin) {
+      // Only an account whose sign-in without code was accepted is signed in
+      // without a click: any other one could get a code e-mailed.
+      await this.loginRequired();
       return;
     }
     await this.setStatus(false, this.pauseMessage() ?? T.connecting);
@@ -188,6 +223,9 @@ export class LevitonApp {
     this.readCount = 0;
     this.published = undefined;
     this.badges = new Map();
+    this.lists = new Map();
+    this.stale = new Set();
+    this.grant = false;
     this.blocked = undefined;
     this.retryAt = null;
     this.retries = 0;
@@ -205,22 +243,54 @@ export class LevitonApp {
     return fingerprint(this.memory.salt ?? '', this.config.email, this.config.password);
   }
 
-  /** Whether this account asked for a verification code (then never signed in without a click). */
+  /** Whether this account asked for a verification code (for the message). */
   get twoFactor() {
     return this.config.account !== '' && this.memory.twoFactor.includes(this.config.account);
   }
 
-  async markTwoFactor(on) {
+  /** Whether a sign-in without code of this account was accepted (and no code asked since). */
+  get noCode() {
+    return this.config.account !== '' && this.memory.noCode.includes(this.config.account);
+  }
+
+  /** A sign-in may start without a click: only for an account known to need no code. */
+  get mayLogin() {
+    return this.noCode || this.grant;
+  }
+
+  async mark(list, on) {
     const { account } = this.config;
-    const list = this.memory.twoFactor.filter((a) => a !== account);
+    const next = this.memory[list].filter((a) => a !== account);
     if (on) {
-      list.push(account);
+      next.push(account);
     }
-    const next = list.slice(-LIMITS.twoFactorAccounts);
-    if (JSON.stringify(next) !== JSON.stringify(this.memory.twoFactor)) {
-      this.memory.twoFactor = next;
+    const capped = next.slice(-LIMITS.twoFactorAccounts);
+    if (JSON.stringify(capped) !== JSON.stringify(this.memory[list])) {
+      this.memory[list] = capped;
       await this.saveMemory();
     }
+  }
+
+  markTwoFactor(on) {
+    return this.mark('twoFactor', on);
+  }
+
+  /** A sign-in accepted: without code, the account may be signed in without a click from now on. */
+  async loggedIn({ code }) {
+    if (code) {
+      await this.markTwoFactor(true);
+      return;
+    }
+    await this.mark('noCode', true);
+    await this.markTwoFactor(false);
+  }
+
+  /** No session and no sign-in allowed without a click: stop, no timer. */
+  async loginRequired() {
+    this.blocked = this.twoFactor ? 'two_factor' : 'login_required';
+    this.retryAt = null;
+    this.clearTimer();
+    await this.setStatus(false, this.blockMessage());
   }
 
   /**
@@ -234,7 +304,8 @@ export class LevitonApp {
       await this.start(raw);
       return;
     }
-    await this.configUpdated(raw);
+    // A reconnection is not a click: it never signs in by itself.
+    await this.configUpdated(raw, { click: false });
     this.published = undefined;
     this.badges = new Map();
     const status = this.lastStatus;
@@ -249,19 +320,36 @@ export class LevitonApp {
     await this.publishBadges();
   }
 
-  /** New credentials restart; a new interval reschedules; a new language renames. */
-  async configUpdated(raw = {}) {
+  /**
+   * New credentials restart; a new interval reschedules; a new language
+   * renames. Saved by the user (`click`, the SDK handler): it counts as a
+   * click, so a stop waiting for one is lifted and one sign-in may start; the
+   * wait for a code stays (its own buttons).
+   */
+  async configUpdated(raw = {}, { click = true } = {}) {
     const next = normalizeConfig(raw);
     const previous = this.config;
     if (next.email !== previous.email || next.password !== previous.password) {
-      return this.start(raw);
+      return this.start(raw, { grant: click });
     }
     this.config = next;
-    if (next.pollInterval !== previous.pollInterval && this.timer) {
-      this.scheduleNext();
-    }
     if (next.language !== previous.language) {
       await this.publishDevices();
+    }
+    if (
+      click &&
+      this.client.hasCredentials &&
+      (this.blocked === 'login_required' || BLOCKS.has(this.blocked))
+    ) {
+      this.blocked = undefined;
+      this.retryAt = null;
+      await this.saveBlock();
+      this.grant = true;
+      await this.tick();
+      return;
+    }
+    if (next.pollInterval !== previous.pollInterval && this.timer) {
+      this.scheduleNext();
     }
   }
 
@@ -373,10 +461,16 @@ export class LevitonApp {
       this.scheduleNext();
       return;
     }
+    // A sign-in without a click only for an account known to need no code;
+    // a click allows one, for this cycle only.
+    const options = { allowLogin: this.mayLogin };
+    this.grant = false;
+    if (!this.client.session && !options.allowLogin) {
+      await this.loginRequired();
+      return;
+    }
     this.client.beginCycle();
     this.client.timeout = quick ? TIMINGS.quickTimeout : undefined;
-    // An account that asks for a code is never signed in again by the cycle.
-    const options = { allowLogin: !this.twoFactor };
     try {
       if (!this.residences || now - this.topologyAt >= TIMINGS.topologyInterval) {
         try {
@@ -390,10 +484,7 @@ export class LevitonApp {
           this.logger.info(`Leviton residences not read again: ${errorReason(err)}`);
         }
       }
-      const lists = [];
-      for (const residence of this.residences) {
-        lists.push(await this.client.switches(residence, options));
-      }
+      const lists = await this.readResidences(options);
       if (generation !== this.generation) {
         return;
       }
@@ -421,6 +512,63 @@ export class LevitonApp {
     if (generation === this.generation) {
       this.scheduleNext();
     }
+  }
+
+  /**
+   * The devices of every residence, each read on its own: one that fails keeps
+   * its last devices (badge unreachable) and the others go on. Only when every
+   * residence fails is a 401/403 taken as a refused token (dropped, one new
+   * sign-in, the reads again), or the error the cycle's.
+   */
+  async readResidences(options) {
+    const read = async (retryAuth) => {
+      const lists = new Map();
+      const failures = new Map();
+      for (const residence of this.residences) {
+        try {
+          lists.set(residence, await this.client.switches(residence, { ...options, retryAuth }));
+        } catch (err) {
+          const own =
+            err instanceof LevitonError &&
+            PER_RESIDENCE.has(err.kind) &&
+            !(err.kind === 'unauthorized' && err.notSent);
+          if (!own || retryAuth) {
+            throw err;
+          }
+          failures.set(residence, err);
+        }
+      }
+      return { lists, failures };
+    };
+    let { lists, failures } = await read(false);
+    if (failures.size > 0 && lists.size === 0) {
+      const errors = [...failures.values()];
+      if (!errors.some((e) => e.kind === 'unauthorized' || e.kind === 'forbidden')) {
+        throw errors[0];
+      }
+      ({ lists, failures } = await read(true));
+    }
+    for (const residence of [...this.lists.keys()]) {
+      if (!this.residences.includes(residence)) {
+        this.lists.delete(residence);
+      }
+    }
+    this.stale = new Set();
+    for (const [residence, list] of lists) {
+      this.lists.set(residence, list);
+    }
+    for (const [residence, err] of failures) {
+      this.logger.info(`Leviton: one residence not read (${errorReason(err)})`);
+      for (const raw of this.lists.get(residence) ?? []) {
+        const id = readDevices([[raw]])
+          .keys()
+          .next().value;
+        if (id) {
+          this.stale.add(id);
+        }
+      }
+    }
+    return [...this.residences].map((r) => this.lists.get(r)).filter(Boolean);
   }
 
   /** A pause of every path (429, too many sign-ins, 403), kept in /data. */
@@ -454,7 +602,9 @@ export class LevitonApp {
       case 'login_rejected':
         return T.loginRejected(this.blockStatus ?? '?', wait);
       case 'session_refused':
-        return T.sessionRefused(wait ?? age(0));
+        return wait ? T.sessionRefused(wait) : T.sessionRefusedWaiting;
+      case 'login_required':
+        return T.loginRequired;
       default:
         return T.twoFactor;
     }
@@ -462,8 +612,10 @@ export class LevitonApp {
 
   /** The account asks for a code: stop, until a button gets a session. */
   async needCode() {
+    await this.mark('noCode', false);
     await this.markTwoFactor(true);
     this.blocked = 'two_factor';
+    this.retryAt = null;
     this.clearTimer();
     await this.setStatus(false, T.twoFactor);
   }
@@ -474,21 +626,24 @@ export class LevitonApp {
       await this.setStatus(false, T.noCredentials);
       return;
     }
-    if (err.kind === 'two_factor' || (err.kind === 'unauthorized' && this.twoFactor)) {
-      // Each sign-in without code e-mails one: at most one automatic e-mail per incident.
+    if (err.kind === 'two_factor') {
+      // The account uses a code: never signed in again without a click.
       this.logger.warn(`Leviton stopped: ${reason}`);
       await this.needCode();
       return;
     }
+    if (err.kind === 'unauthorized') {
+      // The token refused and no sign-in allowed without a click.
+      this.logger.warn(`Leviton stopped: ${reason}`);
+      await this.loginRequired();
+      return;
+    }
     const schedule = SCHEDULES[err.kind];
     if (schedule) {
-      // Never signed in again in a loop: refusals may lock the account. An
-      // account that asks for a code waits for the user (a new try would
-      // e-mail a code).
-      const wait =
-        err.kind !== 'session_refused' && this.twoFactor
-          ? null
-          : schedule[Math.min(this.retries, schedule.length - 1)];
+      // Never signed in again in a loop: refusals may lock the account. Only
+      // an account known to need no code is tried again by itself (a new try
+      // could e-mail a code); any other one waits for a click.
+      const wait = this.noCode ? schedule[Math.min(this.retries, schedule.length - 1)] : null;
       this.blocked = err.kind;
       this.retryAt = wait === null ? null : this.now() + wait;
       this.retries += 1;
@@ -536,6 +691,8 @@ export class LevitonApp {
   rebuild() {
     this.plans = new Map();
     this.writers = new Map();
+    /** The features of a model shown read only (not in the lists). */
+    this.readOnly = new Set();
     for (const device of this.devices.values()) {
       const plan = planOf(device);
       if (!plan) {
@@ -546,6 +703,8 @@ export class LevitonApp {
       for (const spec of plan.specs) {
         if (spec.write) {
           this.writers.set(ids.feature(spec.key), { deviceId: device.id, spec });
+        } else if (plan.readOnly) {
+          this.readOnly.add(ids.feature(spec.key));
         }
       }
     }
@@ -652,7 +811,12 @@ export class LevitonApp {
         continue;
       }
       const source = sources.get(device.external_id);
-      const unreachable = this.blocked || this.offline || !source || source.online === false;
+      const unreachable =
+        this.blocked ||
+        this.offline ||
+        !source ||
+        source.online === false ||
+        this.stale.has(source.id);
       const transport = unreachable ? DEVICE_TRANSPORTS.UNREACHABLE : DEVICE_TRANSPORTS.CLOUD;
       if (this.badges.get(device.external_id) !== transport) {
         entries.push({ external_id: device.external_id, transport });
@@ -707,7 +871,7 @@ export class LevitonApp {
     const received = this.now();
     const writer = this.writers.get(feature?.external_id);
     if (!writer) {
-      throw this.error(ERRORS.unknown);
+      throw this.error(this.readOnly?.has(feature?.external_id) ? ERRORS.readOnly : ERRORS.unknown);
     }
     const number = Number(value);
     if (value === null || value === '' || !Number.isFinite(number)) {
@@ -716,25 +880,54 @@ export class LevitonApp {
     if (this.blocked || !this.client.hasCredentials || !this.client.session) {
       throw this.error(ERRORS.blocked);
     }
-    if (this.now() < this.pausedUntil && this.pauseKind !== 'backoff') {
-      throw this.error(ERRORS.paused);
+    const paused = this.commandPause();
+    if (paused) {
+      throw this.error(paused);
     }
     const { deviceId, spec } = writer;
     const generation = this.generation;
-    await this.serial(deviceId, () => this.command(deviceId, spec, number, received, generation));
+    await this.serial(
+      deviceId,
+      () => this.command(deviceId, spec, number, received, generation),
+      received + TIMINGS.commandSendBy,
+    );
+  }
+
+  /** The message of a pause that holds the commands (each kind its own), else undefined. */
+  commandPause() {
+    if (this.now() >= this.pausedUntil || this.pauseKind === 'backoff') {
+      return undefined;
+    }
+    return this.pauseMessage() ?? ERRORS.paused;
   }
 
   /**
    * One command at a time per device: each waits for the previous one,
-   * including a request still finishing in the background.
+   * including a request still finishing in the background, but never past
+   * `sendBy`: still waiting then, it is refused unsent (Gladys gets its answer
+   * within its 5 s).
    */
-  serial(deviceId, job) {
+  serial(deviceId, job, sendBy) {
     const previous = this.queues.get(deviceId) ?? Promise.resolve();
-    const run = previous.then(job);
-    const tail = run.then(
-      (result) => result?.background,
-      () => {},
-    );
+    let handle;
+    const late = new Promise((resolve) => {
+      handle = this.timers.setTimeout(() => resolve(false), Math.max(0, sendBy - this.now()));
+    });
+    const run = Promise.race([previous.then(() => true), late]).then((ready) => {
+      this.timers.clearTimeout(handle);
+      if (!ready) {
+        throw this.error(ERRORS.late);
+      }
+      return job();
+    });
+    // The next command waits for the previous ones and this one (its background too).
+    const tail = Promise.all([
+      previous,
+      run.then(
+        (result) => result?.background,
+        () => {},
+      ),
+    ]).then(() => undefined);
     this.queues.set(deviceId, tail);
     tail.finally(() => {
       if (this.queues.get(deviceId) === tail) {
@@ -764,14 +957,26 @@ export class LevitonApp {
     if (payload.refuse) {
       throw this.error(ERRORS[payload.refuse]);
     }
-    if (this.blocked || (this.now() < this.pausedUntil && this.pauseKind !== 'backoff')) {
-      throw this.error(this.blocked ? ERRORS.blocked : ERRORS.paused);
+    if (this.blocked) {
+      throw this.error(ERRORS.blocked);
     }
-    if (sendBy - this.now() < 300) {
+    const paused = this.commandPause();
+    if (paused) {
+      throw this.error(paused);
+    }
+    if (sendBy - this.now() < 300 || this.client.authenticating) {
+      // Too late, or a sign-in runs (the command would leave after it): unsent.
       throw this.error(ERRORS.late);
     }
     this.logger.info(`Leviton command: ${spec.key} of a ${device.kind}`);
-    const request = this.client.command(deviceId, payload, { timeout: TIMINGS.requestTimeout });
+    let sent = false;
+    const request = this.client.command(deviceId, payload, {
+      timeout: TIMINGS.requestTimeout,
+      sendWithin: sendBy - this.now(),
+      onSent: () => {
+        sent = true;
+      },
+    });
     let handle;
     const ack = new Promise((resolve) => {
       handle = this.timers.setTimeout(
@@ -787,6 +992,11 @@ export class LevitonApp {
       ack,
     ]);
     this.timers.clearTimeout(handle);
+    if (outcome.pending && !sent) {
+      // Never left (its send limit destroys it): Gladys hears it was not sent.
+      request.catch(() => {});
+      throw this.error(ERRORS.late);
+    }
     if (outcome.pending) {
       // Sent, Leviton still at work: Gladys is answered now, the state follows.
       const background = request
@@ -902,7 +1112,7 @@ export class LevitonApp {
       case 'rate_limited':
         await this.pause(err);
         await this.setStatus(this.connectedOnce, this.pauseMessage());
-        return this.error(ERRORS.paused);
+        return this.error(this.pauseMessage() ?? ERRORS.paused);
       case 'unauthorized':
         // The token is forgotten: the next cycle signs in again (or asks for a code).
         return this.error(ERRORS.blocked);
@@ -914,6 +1124,9 @@ export class LevitonApp {
         this.scheduleReread(deviceId);
         return this.error(ERRORS.unsure(reason));
       case 'unavailable':
+      case 'bad_response':
+      case 'size':
+        // Answered, but not as expected: the command may have been done.
         this.scheduleReread(deviceId);
         return this.error(ERRORS.unsure(reason));
       default:
@@ -961,10 +1174,13 @@ export class LevitonApp {
       return T.busy;
     }
     this.lastTestAt = this.now();
-    // One read per click: the button is how a stopped account is tried again.
+    // One read per click: the button is how a stopped account is tried again,
+    // and a click may sign in once.
     this.blocked = undefined;
+    this.retryAt = null;
     this.pausedUntil = 0;
     this.pauseKind = undefined;
+    this.grant = true;
     await this.saveBlock();
     await this.tick({ quick: true });
     return this.lastMessage ?? T.noCredentials;
@@ -1042,7 +1258,7 @@ export class LevitonApp {
       }
       return this.codeFailure(err);
     }
-    await this.markTwoFactor(false);
+    // The account was marked "no code" by the sign-in (src/client.js onLogin).
     await this.signedIn();
     return T.code.notNeeded;
   }

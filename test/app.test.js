@@ -27,6 +27,8 @@ import {
 import { fakeLeviton, memoryStore, settle } from './helpers/fakeLeviton.js';
 
 const CONFIG = { email: EMAIL, password: PASSWORD };
+/** /data of an account whose sign-in without code was accepted before (signed in without a click). */
+const known = (extra = {}) => memoryStore({ noCode: [accountKey(EMAIL)], ...extra });
 const device = (id) => `ext:test-integration:device:${id}`;
 const feature = (id, key) => `${device(id)}:${key}`;
 
@@ -43,7 +45,7 @@ async function setup(
   t,
   {
     config = CONFIG,
-    store = memoryStore(),
+    store = known(),
     server = fakeLeviton(),
     now = NOW,
     create = true,
@@ -166,7 +168,15 @@ test('the features: a dimmer is a light with a brightness, a switch or a plug an
     ['online', 'unknown', 'unknown', 0, 1, true],
   ]);
   assert.deepEqual(shape(IDS.outlet), shape(IDS.switch));
-  assert.deepEqual(shape(IDS.unknownDimmer), shape(IDS.dimmer), 'canSetLevel for an unknown model');
+  assert.deepEqual(
+    shape(IDS.unknownDimmer),
+    [
+      ['power', 'light', 'binary', 0, 1, true],
+      ['brightness', 'light', 'brightness', 0, 100, true],
+      ['online', 'unknown', 'unknown', 0, 1, true],
+    ],
+    'canSetLevel for an unknown model, read only until it is listed',
+  );
   const params = Object.fromEntries(created(IDS.dimmer).params.map((p) => [p.name, p.value]));
   assert.deepEqual(params, {
     model: 'DW6HD',
@@ -224,7 +234,7 @@ test('the interval follows the configuration, bounded to 30-60 s', async (t) => 
 });
 
 test('a restart reuses the stored token: no new sign-in', async (t) => {
-  const store = memoryStore();
+  const store = known();
   const server = fakeLeviton();
   const first = await setup(t, { store, server });
   first.app.stop();
@@ -245,7 +255,7 @@ test('a token near its end is renewed by one sign-in, for an account without cod
 });
 
 test('a refused token: one new sign-in and the read again; refused again right after, a spaced stop', async (t) => {
-  const store = memoryStore();
+  const store = known();
   const server = fakeLeviton();
   const { gladys, advance } = await setup(t, { server, store });
   server.revokeTokens();
@@ -272,7 +282,7 @@ test('a refused token: one new sign-in and the read again; refused again right a
 });
 
 test('a refused password stops, survives a restart, and a new password lifts it', async (t) => {
-  const store = memoryStore();
+  const store = known();
   const server = fakeLeviton();
   server.password = 'another one';
   const first = await setup(t, { server, store, create: false });
@@ -308,7 +318,7 @@ test('a refused password is tried again after 6 h, then every 24 h', async (t) =
 });
 
 test('"too many failed attempts" pauses every path for an hour, kept in /data', async (t) => {
-  const store = memoryStore();
+  const store = known();
   const server = fakeLeviton();
   server.locked = true;
   const { gladys, advance } = await setup(t, { server, store, create: false });
@@ -322,12 +332,76 @@ test('"too many failed attempts" pauses every path for an hour, kept in /data', 
   assert.equal(gladys.fake.connectionStatus.connected, true);
 });
 
-test('verification code: one automatic e-mail at most, then the two buttons', async (t) => {
+test('a start with a configuration and an empty /data never signs in without a click', async (t) => {
+  for (const [i, initial] of [null, { garbage: true, noCode: 'corrupted' }].entries()) {
+    const server = fakeLeviton({ otp: true });
+    const { gladys, advance } = await setup(t, {
+      server,
+      store: memoryStore(initial),
+      create: false,
+      mock: i === 0,
+    });
+    assert.equal(server.requests.length, 0, 'no request at all');
+    assert.equal(server.emails, 0);
+    assert.match(message(gladys).en, /Sign-in required: click "Test the connection"/);
+    await advance(2 * HOUR, 10 * MINUTE);
+    assert.equal(server.requests.length, 0, 'no timer either');
+    // A reconnection to Gladys is not a click.
+    await gladys.connect();
+    await settle();
+    assert.equal(server.logins().length, 0);
+  }
+});
+
+test('a saved configuration counts as a click: one sign-in', async (t) => {
+  const store = memoryStore();
+  const server = fakeLeviton();
+  const { gladys, advance } = await setup(t, { server, store, create: false });
+  assert.equal(server.logins().length, 0);
+  await gladys.fake.configUpdated(CONFIG);
+  await settle();
+  assert.equal(server.logins().length, 1);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  assert.deepEqual(store.data.noCode, [accountKey(EMAIL)], 'accepted without code: remembered');
+  // Known now: a token near its end may be renewed by itself, a reconnection signs in nothing.
+  await gladys.connect();
+  await settle();
+  assert.equal(server.logins().length, 1);
+  await advance(5 * MINUTE);
+  assert.equal(server.logins().length, 1);
+});
+
+test('the test button counts as a click too', async (t) => {
+  const server = fakeLeviton();
+  const { gladys } = await setup(t, { server, store: memoryStore(), create: false });
+  const ack = await gladys.fake.action(ACTIONS.TEST_CONNECTION);
+  assert.match(ack.data.message.en, /Connected to My Leviton/);
+  assert.equal(server.logins().length, 1);
+});
+
+test('an account known without code that turns two-factor on: one e-mail at most, then marked', async (t) => {
+  const store = known();
+  const server = fakeLeviton({ ttl: 3600 });
+  const { gladys, advance } = await setup(t, { server, store, create: false });
+  server.otp = true;
+  server.revokeTokens();
+  await advance(60 * SECOND);
+  assert.equal(server.emails, 1);
+  assert.match(message(gladys).en, /asks for a verification code/);
+  assert.deepEqual(store.data.noCode, [], 'no longer signed in without a click');
+  await advance(3 * HOUR, 10 * MINUTE);
+  assert.equal(server.emails, 1);
+});
+
+test('verification code: the two buttons, never a sign-in without a click', async (t) => {
   const store = memoryStore();
   const server = fakeLeviton({ otp: true });
   const logs = [];
   const { gladys, advance } = await setup(t, { server, store, create: false, logs });
-  assert.equal(server.emails, 1, 'the first sign-in made Leviton e-mail a code');
+  assert.equal(server.logins().length, 0);
+  await gladys.fake.configUpdated(CONFIG);
+  await settle();
+  assert.equal(server.emails, 1, 'the sign-in of the click made Leviton e-mail a code');
   assert.match(message(gladys).en, /asks for a verification code/);
   assert.deepEqual(store.data.twoFactor, [accountKey(EMAIL)]);
   await advance(2 * HOUR, MINUTE);
@@ -377,6 +451,8 @@ test('a code account restarted without session waits for the buttons', async (t)
   const store = memoryStore();
   const server = fakeLeviton({ otp: true });
   const first = await setup(t, { server, store, create: false });
+  await first.gladys.fake.configUpdated(CONFIG);
+  await settle();
   first.app.stop();
   store.data.session = null;
   const second = await setup(t, { server, store, create: false, mock: false });
@@ -542,7 +618,7 @@ test('a refused token on a command: no sign-in from the command, the next cycle 
 });
 
 test('429: a bounded pause of every path, kept in /data, read back capped', async (t) => {
-  const store = memoryStore();
+  const store = known();
   const server = fakeLeviton();
   const { gladys, set, advance } = await setup(t, { server, store });
   server.queue.push({
@@ -568,7 +644,7 @@ test('429: a bounded pause of every path, kept in /data, read back capped', asyn
 });
 
 test('a pause read back from /data is capped (6 h) and kept across a change of account', async (t) => {
-  const store = memoryStore({
+  const store = known({
     pause: { kind: 'rate', until: NOW + 48 * HOUR },
   });
   const server = fakeLeviton();
@@ -591,7 +667,7 @@ test('5xx and network errors: retried after 1, 2, 5... minutes, never sooner tha
   await advance(55 * SECOND);
   assert.equal(server.requests.length, count);
   await advance(10 * SECOND);
-  assert.equal(server.requests.length, count + 1);
+  assert.equal(server.requests.length, count + 2, 'one try per residence');
   server.down = false;
   await advance(2 * MINUTE + 5 * SECOND);
   assert.equal(gladys.fake.connectionStatus.connected, true);
@@ -648,6 +724,119 @@ test('the test button: one read, at most every 30 s', async (t) => {
   ack = await gladys.fake.action(ACTIONS.TEST_CONNECTION);
   assert.match(ack.data.message.en, /less than 30 seconds/);
   assert.equal(server.reads().length, reads + 2);
+});
+
+test('a command that cannot leave within 3 s is refused unsent, never answered "done"', async (t) => {
+  const { server, set, advance } = await setup(t);
+  server.beforeSent = (request) => (request.method === 'PUT' ? until(4000) : Promise.resolve());
+  const pending = set(IDS.switch, 'power', 1);
+  await advance(5 * SECOND, 100);
+  const ack = await pending;
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /pas été envoyée/);
+  assert.equal(server.puts().length, 0, 'never left');
+});
+
+test('a command while a sign-in runs is refused unsent', async (t) => {
+  const { app, server, set } = await setup(t);
+  app.client.authenticating = new Promise(() => {});
+  const ack = await set(IDS.switch, 'power', 1);
+  app.client.authenticating = undefined;
+  assert.match(ack.error, /pas été envoyée/);
+  assert.equal(server.puts().length, 0);
+});
+
+test('a command waiting behind a slow one is answered within 3 s, refused unsent', async (t) => {
+  const { server, set, advance } = await setup(t);
+  let release;
+  server.before = (request) =>
+    request.method === 'PUT' && !release
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : Promise.resolve();
+  const first = set(IDS.switch, 'power', 1);
+  await settle();
+  let answered;
+  const second = set(IDS.switch, 'power', 0).then((ack) => {
+    answered = Date.now();
+    return ack;
+  });
+  const start = Date.now();
+  await advance(3500, 100);
+  assert.ok(answered !== undefined && answered - start <= 3100, 'answered at 3 s');
+  assert.match((await second).error, /pas été envoyée/);
+  await advance(1000, 100);
+  assert.equal((await first).success, true);
+  release();
+  await settle();
+  assert.equal(server.puts().length, 1);
+});
+
+test('a PUT answered 200 with a body that is not JSON: result unknown, read again', async (t) => {
+  const { server, set, advance } = await setup(t);
+  server.queue.push({ match: (r) => r.method === 'PUT', status: 200, body: '<html>ok</html>' });
+  const ack = await set(IDS.switch, 'power', 1);
+  assert.match(ack.error, /résultat est inconnu/);
+  await advance(3 * SECOND, SECOND);
+  assert.equal(server.of('/api/IotSwitches/502', 'GET').length, 1);
+});
+
+test('a residence that fails keeps its last devices (unreachable), the others go on', async (t) => {
+  const { gladys, server, advance } = await setup(t);
+  server.queue.push({
+    match: (r) => r.path === `/api/Residences/${RESIDENCES.cabin}/iotSwitches`,
+    status: 403,
+    body: { error: {} },
+  });
+  server.device(IDS.switch).power = 'ON';
+  await advance(60 * SECOND);
+  assert.equal(gladys.fake.connectionStatus.connected, true, 'no global pause');
+  assert.equal(last(gladys, IDS.switch, 'power'), 1, 'the other residence read');
+  assert.equal(server.logins().length, 1, 'no new sign-in for one residence');
+  const badge = (id) =>
+    gladys.fake.transports.filter((e) => e.device_external_id === device(id)).pop()?.transport;
+  assert.equal(badge(IDS.cabin), DEVICE_TRANSPORTS.UNREACHABLE);
+  assert.equal(badge(IDS.dimmer), DEVICE_TRANSPORTS.CLOUD);
+  assert.ok(gladys.fake.discoveredDevices.some((d) => d.external_id === device(IDS.cabin)));
+  await advance(60 * SECOND);
+  assert.equal(badge(IDS.cabin), DEVICE_TRANSPORTS.CLOUD, 'back at the next read');
+});
+
+test('a permission holding both a residence and a residential account: both read', async (t) => {
+  const server = fakeLeviton();
+  server.permissions = [
+    { id: 1, residentialAccountId: 77, residenceId: RESIDENCES.cabin, access: 'owner' },
+  ];
+  const { gladys } = await setup(t, { server, create: false });
+  const ids = gladys.fake.discoveredDevices.map((d) => d.external_id);
+  assert.ok(ids.includes(device(IDS.cabin)) && ids.includes(device(IDS.dimmer)));
+});
+
+test('a command on a model the integration does not know is refused (read only)', async (t) => {
+  const { server, set } = await setup(t);
+  const ack = await set(IDS.unknownDimmer, 'power', 1);
+  assert.match(ack.error, /Modèle Leviton inconnu/);
+  assert.equal(server.puts().length, 0);
+});
+
+test('another account: the devices of the previous one are not published again', async (t) => {
+  const { gladys, app } = await setup(t);
+  assert.ok(app.known.size > 0);
+  await gladys.fake.configUpdated({ email: 'other@example.com', password: PASSWORD });
+  await settle();
+  assert.equal(app.known.size, 0);
+});
+
+test('each pause says its own cause on a command', async (t) => {
+  const { app, set } = await setup(t);
+  app.pauseKind = 'locked';
+  app.pausedUntil = Date.now() + HOUR;
+  let ack = await set(IDS.switch, 'power', 1);
+  assert.match(ack.error, /trop de connexions échouées/);
+  app.pauseKind = 'forbidden';
+  ack = await set(IDS.switch, 'power', 1);
+  assert.match(ack.error, /HTTP 403/);
 });
 
 test('the real timers work too (no mocked clock)', async (t) => {

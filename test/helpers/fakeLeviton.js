@@ -83,7 +83,10 @@ export function fakeLeviton({ otp = false, ttl = 1_209_600 } = {}) {
     },
   };
 
-  server.transport = async (url, { method = 'GET', headers = {}, body } = {}) => {
+  server.transport = async (
+    url,
+    { method = 'GET', headers = {}, body, onSent, sendWithin } = {},
+  ) => {
     const target = new URL(url);
     const request = {
       method,
@@ -93,7 +96,25 @@ export function fakeLeviton({ otp = false, ttl = 1_209_600 } = {}) {
       headers,
       json: body ? JSON.parse(body) : undefined,
     };
+    // `beforeSent` may hold the request before it leaves (a slow connection):
+    // past `sendWithin`, it never leaves, as the real transport.
+    if (server.beforeSent) {
+      let handle;
+      const left = await Promise.race([
+        server.beforeSent(request).then(() => true),
+        sendWithin === undefined
+          ? new Promise(() => {})
+          : new Promise((resolve) => {
+              handle = setTimeout(() => resolve(false), sendWithin);
+            }),
+      ]);
+      clearTimeout(handle);
+      if (!left) {
+        throw new LevitonError('timeout', 'not sent in time', { notSent: true });
+      }
+    }
     server.requests.push(request);
+    onSent?.();
     await server.before?.(request);
     if (server.down) {
       throw new LevitonError('network', 'connection refused', { notSent: true });
@@ -138,10 +159,13 @@ export function fakeLeviton({ otp = false, ttl = 1_209_600 } = {}) {
       return loopbackError(401, 'Authorization Required', 'AUTHORIZATION_REQUIRED');
     }
     if (method === 'GET' && path === `/api/Person/${USER_ID}/residentialPermissions`) {
-      return answer(200, [
-        { id: 1, personId: USER_ID, residentialAccountId: ACCOUNT_ID, access: 'owner' },
-        { id: 2, personId: USER_ID, residenceId: RESIDENCES.cabin, access: 'guest' },
-      ]);
+      return answer(
+        200,
+        server.permissions ?? [
+          { id: 1, personId: USER_ID, residentialAccountId: ACCOUNT_ID, access: 'owner' },
+          { id: 2, personId: USER_ID, residenceId: RESIDENCES.cabin, access: 'guest' },
+        ],
+      );
     }
     if (method === 'GET' && path === `/api/ResidentialAccounts/${ACCOUNT_ID}/residences`) {
       return answer(200, [{ id: RESIDENCES.home, name: 'Home', residentialAccountId: ACCOUNT_ID }]);

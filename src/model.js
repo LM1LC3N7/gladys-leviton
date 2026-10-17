@@ -30,14 +30,14 @@ const POWER = { ON: 1, OFF: 0 };
  * `outlet` or `switch` (an on/off), or undefined when it is not shown (fans,
  * button controllers, the bridge, a device without a power state). The model
  * decides first, so that a device keeps its kind; `canSetLevel` decides for an
- * unknown model.
+ * unknown model (shown read only, see `knownModel`).
  */
 export function kindOf(raw) {
   const model = text(raw?.model)?.toUpperCase();
   if (model && MODELS.hidden.has(model)) {
     return undefined;
   }
-  if (!(String(raw?.power) in POWER)) {
+  if (!Object.hasOwn(POWER, String(raw?.power))) {
     return undefined;
   }
   if (model && MODELS.dimmers.has(model)) {
@@ -50,6 +50,14 @@ export function kindOf(raw) {
     return 'switch';
   }
   return raw?.canSetLevel === true ? 'dimmer' : 'switch';
+}
+
+/** Whether the model is one of the lists: an unknown one is shown read only. */
+export function knownModel(raw) {
+  const model = text(raw?.model)?.toUpperCase();
+  return Boolean(
+    model && (MODELS.dimmers.has(model) || MODELS.outlets.has(model) || MODELS.switches.has(model)),
+  );
 }
 
 /** One `iotSwitch` -> a device, or undefined when it has no usable id. */
@@ -68,6 +76,7 @@ export function readSwitch(raw) {
     version: text(raw.version),
     manufacturer: text(raw.manufacturer),
     kind: kindOf(raw),
+    known: knownModel(raw),
     power: POWER[String(raw.power)],
     brightness: level(raw.brightness),
     minLevel: minLevel !== undefined && minLevel >= 1 ? minLevel : 1,

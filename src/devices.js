@@ -88,17 +88,28 @@ function switchSpecs() {
   ];
 }
 
-/** The features of a device: `{ kind, specs }`, or undefined when it is not shown. */
+/**
+ * The features of a device: `{ kind, specs, readOnly }`, or undefined when it
+ * is not shown. A model missing from the lists is shown read only: nothing is
+ * commanded on a device whose kind is only guessed.
+ */
 export function planOf(device) {
+  let specs;
   switch (device.kind) {
     case 'dimmer':
-      return { kind: device.kind, specs: dimmerSpecs() };
+      specs = dimmerSpecs();
+      break;
     case 'switch':
     case 'outlet':
-      return { kind: device.kind, specs: switchSpecs() };
+      specs = switchSpecs();
+      break;
     default:
       return undefined;
   }
+  if (!device.known) {
+    specs = specs.map(({ write: _write, ...spec }) => spec);
+  }
+  return { kind: device.kind, specs, readOnly: !device.known };
 }
 
 export const deviceIds = (gladys, id) => gladys.externalIds('device', id);

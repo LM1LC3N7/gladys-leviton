@@ -60,7 +60,8 @@ Requires code."; the same sign-in sent again with `code`; 408 "Invalid code"),
 401 "Login Failed" and 403 "Too many failed attempts", the LoopBack error
 envelope (`error.statusCode`, `error.message`), `include=user` on the sign-in.
 Ported in `src/constants.js` and `src/devices.js`: the list of models and their
-kinds (dimmers, outlets, switches, fans, controllers, the bridge), the power
+kinds (dimmers, outlets, switches, fans, controllers, the bridge, the GFCI
+outlets, hidden here), the power
 sent with a brightness. Changed: the code is never kept nor sent again by the
 integration (schmittx re-sends the stored one at each sign-in); an account
 that asks for a code is never signed in again without a click.

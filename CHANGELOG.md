@@ -37,6 +37,14 @@ the notes of the version's GitHub Release.
 - Status, Discovery, badges and states sent again at every reconnection to
   Gladys; the Discovery list never shrinks. Transport badge per device
   (unreachable when Leviton says it is offline).
+- Never a sign-in without a click unless the account is known to need no
+  code (a sign-in without code accepted before): any other account, or a lost
+  `/data`, waits with "Sign-in required"; saving the configuration and the
+  buttons count as a click, a reconnection to Gladys does not.
+- A command never leaves more than 3 s after the click (queue, sign-in in
+  progress, slow network): refused unsent; "done" only once it has left. A
+  residence in error keeps its last devices without stopping the others.
+  Unknown models read only; GFCI outlets not shown.
 - "Test the connection" button; documentation in English and French;
   `LICENSE` and `THIRD_PARTY_NOTICES.md` shipped in the image.
 

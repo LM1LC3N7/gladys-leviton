@@ -33,6 +33,7 @@ test('sign-in answers: refused, code asked, code refused, locked, rejected, tran
   );
   assert.equal(kind(406, {}, { withCode: true }), 'code_refused');
   assert.equal(kind(408, { message: 'Error: Invalid code' }, { withCode: true }), 'code_refused');
+  assert.equal(kind(408, {}), 'login_rejected', 'a 408 without code: a spaced stop');
   assert.equal(kind(403, { message: 'Too many failed attempts' }), 'locked');
   assert.equal(kind(400, { message: 'whatever' }), 'login_rejected');
   assert.equal(kind(429, {}), 'rate_limited');
@@ -109,6 +110,16 @@ test('the transport: bounded answers, timeouts, never a redirect followed', asyn
     assert.equal(err.notSent, false, 'the request had left');
     return true;
   });
+  let sent = false;
+  const slow = await httpRequest(`${s.url}/slow`, {
+    timeout: 2000,
+    sendWithin: 50,
+    onSent: () => {
+      sent = true;
+    },
+  });
+  assert.equal(slow.status, 200, 'the send limit stops only a request that has not left');
+  assert.ok(sent);
   const redirect = await httpRequest(`${s.url}/redirect`, { method: 'POST', body: '{}' });
   assert.equal(redirect.status, 307, 'answered as is, never followed');
   await assert.rejects(httpRequest('http://127.0.0.1:1/'), { kind: 'network' });

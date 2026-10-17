@@ -67,7 +67,10 @@ export function errorReason(err) {
 /**
  * One request; resolves `{ status, headers, body }` whatever the status.
  * `onSent` is called once the request has fully left (a command must know
- * whether it was sent).
+ * whether it was sent); `sendWithin` (ms): a request that has not left by
+ * then is destroyed and rejected unsent (a command is never sent late). A
+ * new socket per request (`agent: false`): no kept-alive socket the server
+ * may have closed meanwhile.
  */
 export function httpRequest(
   url,
@@ -78,22 +81,25 @@ export function httpRequest(
     timeout = TIMINGS.requestTimeout,
     maxBytes = LIMITS.responseBytes,
     onSent,
+    sendWithin,
   } = {},
 ) {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const lib = target.protocol === 'https:' ? https : http;
     let timer;
+    let sendTimer;
     let settled = false;
     let sent = false;
     const settle = (fn, value) => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
+        clearTimeout(sendTimer);
         fn(value);
       }
     };
-    const req = lib.request(target, { method, headers }, (res) => {
+    const req = lib.request(target, { method, headers, agent: false }, (res) => {
       const chunks = [];
       let size = 0;
       res.on('data', (chunk) => {
@@ -116,8 +122,20 @@ export function httpRequest(
     });
     req.on('finish', () => {
       sent = true;
+      clearTimeout(sendTimer);
       onSent?.();
     });
+    if (sendWithin !== undefined) {
+      sendTimer = setTimeout(
+        () => {
+          if (!sent) {
+            settle(reject, new LevitonError('timeout', 'not sent in time', { notSent: true }));
+            req.destroy();
+          }
+        },
+        Math.max(1, sendWithin),
+      );
+    }
     timer = setTimeout(
       () => {
         settle(
@@ -227,7 +245,7 @@ export function loginError(answer, { withCode = false, now } = {}) {
       { status, code },
     );
   }
-  if (status === 408 || (status === 406 && withCode)) {
+  if ((status === 408 || status === 406) && withCode) {
     return new LevitonError('code_refused', 'verification code refused', { status, code });
   }
   if (status === 406) {
