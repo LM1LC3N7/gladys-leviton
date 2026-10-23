@@ -6,8 +6,8 @@
     "en": "Leviton Decora Smart Wi-Fi switches, dimmers and plugs (US, CA) via the My Leviton cloud.",
     "fr": "Interrupteurs, variateurs et prises Leviton Decora Smart Wi-Fi (US, CA) par My Leviton."
   },
-  "version": "0.1.1",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-leviton:0.1.1",
+  "version": "0.1.2",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-leviton:0.1.2",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-leviton/main/cover.png",
   "categories": ["lighting"],
